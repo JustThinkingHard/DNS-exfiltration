@@ -6,7 +6,7 @@
 #include <arpa/nameser.h>
 #include <resolv.h>
 
-#define BASE_DOMAIN "tm-it.fr"
+#define BASE_DOMAIN "data.tm-it.fr"
 #define CHUNK_SIZE 30 
 #define MAX_OUTPUT_SIZE 8192
 
